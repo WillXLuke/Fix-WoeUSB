@@ -1,40 +1,23 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 # Build a Debian binary package (architecture: all) for WoeUSB
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The resulting package is written to distribution/deb/woeusb_<version>_all.deb
 
-set \
-    -o errexit \
-    -o nounset \
-    -o pipefail
+set -eu
 
-script_dir="$(
-    cd "$(dirname "${BASH_SOURCE[0]}")" \
-        && pwd
-)"
-product_dir="$(
-    cd "${script_dir}/.." \
-        && pwd
-)"
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+product_dir="$(CDPATH= cd -- "${script_dir}/.." && pwd)"
 
 # Override with: WOEUSB_VERSION=5.3.1 ./dev-assets/build-deb.sh
 product_version="${WOEUSB_VERSION:-5.3.0}"
 
-work_dir="$(
-    mktemp \
-        -d \
-        -t \
-        woeusb-deb.XXXXXX
-)"
-trap \
-    'rm --recursive --force "${work_dir}"' \
-    EXIT
+work_dir="$(mktemp -d -t woeusb-deb.XXXXXX)"
+trap 'rm -rf "${work_dir}"' EXIT
 
 package_root="${work_dir}/package"
-mkdir \
-    --parents \
+mkdir -p \
     "${package_root}/usr/bin" \
     "${package_root}/usr/share/man/man1" \
     "${package_root}/usr/share/woeusb" \
@@ -59,22 +42,19 @@ cp \
     "${package_root}/usr/share/woeusb/woeusb.svg"
 
 # Compile gettext message catalogs(.po -> .mo)
-while IFS='' read -r -d '' po_file; do
+find \
+    "${product_dir}/share/locale" \
+    -name '*.po' \
+    -print \
+| while IFS='' read -r po_file; do
     locale_dir="${po_file%/*}"
     locale_name="$(basename "${locale_dir%/*}")"
     mo_dir="${package_root}/usr/share/locale/${locale_name}/LC_MESSAGES"
-    mkdir \
-        --parents \
-        "${mo_dir}"
+    mkdir -p "${mo_dir}"
     msgfmt \
         "${po_file}" \
-        --output-file="${mo_dir}/woeusb.mo"
-done < <( \
-    find \
-        "${product_dir}/share/locale" \
-        -name '*.po' \
-        -print0 \
-)
+        -o "${mo_dir}/woeusb.mo"
+done
 
 # Package metadata
 sed \
@@ -82,9 +62,7 @@ sed \
     "${product_dir}/packaging/debian/control" \
     > "${package_root}/DEBIAN/control"
 
-mkdir \
-    --parents \
-    "${product_dir}/distribution/deb"
+mkdir -p "${product_dir}/distribution/deb"
 dpkg-deb \
     --build \
     --root-owner-group \
