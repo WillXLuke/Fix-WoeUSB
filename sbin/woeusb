@@ -58,12 +58,18 @@ init(){
         target_filesystem_type=FS_FAT \
         target_fs_label='Windows USB'
 
+    # GRUB target architecture for the legacy/PC bootloader installation.
+    # Defaults to i386-pc for x86 BIOS booting, but modern Windows on ARM
+    # and UEFI-only systems may need e.g. arm64-efi or x86_64-efi.
+    local grub_target_architecture='i386-pc'
+
     # Parameters that needs to be determined in runtime
     # due to different names in distributions
     local \
         command_mkdosfs \
         command_mkntfs \
         command_grubinstall \
+        command_wimsplit \
         name_grub_prefix
 
     if ! check_runtime_dependencies \
@@ -71,6 +77,7 @@ init(){
         command_mkdosfs \
         command_mkntfs \
         command_grubinstall \
+        command_wimsplit \
         name_grub_prefix; then
         exit 1
     fi
@@ -86,7 +93,8 @@ init(){
             target_media \
             target_fs_label \
             workaround_bios_boot_flag \
-            target_filesystem_type; then
+            target_filesystem_type \
+            grub_target_architecture; then
         print_help \
             "${application_name}" \
             "${application_version}" \
@@ -180,7 +188,7 @@ init(){
                 "${target_device}"
             install_uefi_ntfs_support_partition \
                 "${rufus_uefi_ntfs_version}" \
-                "${target_device}2" \
+                "$(get_partition_device_path "${target_device}" 2)" \
                 "${temp_dir}" \
                 "${target_device}"
         fi
@@ -213,7 +221,8 @@ init(){
         "${source_fs_mountpoint}" \
         "${target_fs_mountpoint}" \
         "${target_filesystem_type}" \
-        "${dd_block_size}"
+        "${dd_block_size}" \
+        "${command_wimsplit}"
 
     workaround_support_windows_7_uefi_boot \
         "${source_fs_mountpoint}" \
@@ -222,7 +231,8 @@ init(){
     install_legacy_pc_bootloader_grub \
         "${target_fs_mountpoint}" \
         "${target_device}" \
-        "${command_grubinstall}"
+        "${command_grubinstall}" \
+        "${grub_target_architecture}"
 
     install_legacy_pc_bootloader_grub_config \
         "${target_fs_mountpoint}" \
@@ -239,6 +249,41 @@ init(){
         "$(gettext 'The target device should be bootable now\n')"
 
     exit 0
+}
+
+# Determine the current terminal's column count, robust against
+# non-interactive execution (piped output, CI, cron) where stty fails.
+# tput/COLUMNS are tried first as they are more portable on modern
+# terminal emulators, with stty as a fallback and 80 as last resort.
+get_terminal_columns(){
+    local -i columns=0
+    local queried_columns
+
+    if command -v tput >/dev/null 2>&1; then
+        queried_columns="$(tput cols 2>/dev/null || true)"
+        if [[ "${queried_columns}" =~ ^[[:digit:]]+$ ]]; then
+            columns="${queried_columns#0}"
+        fi
+    fi
+
+    if [ "${columns}" -le 0 ] \
+        && [ -n "${COLUMNS:-}" ] \
+        && [[ "${COLUMNS}" =~ ^[[:digit:]]+$ ]]; then
+        columns="${COLUMNS#0}"
+    fi
+
+    if [ "${columns}" -le 0 ]; then
+        queried_columns="$(stty size 2>/dev/null | awk '{print $2}' || true)"
+        if [[ "${queried_columns}" =~ ^[[:digit:]]+$ ]]; then
+            columns="${queried_columns#0}"
+        fi
+    fi
+
+    if [ "${columns}" -le 0 ]; then
+        columns=80
+    fi
+
+    printf '%s' "${columns}"
 }
 
 # FIXME: Doesn't support only printing LHS of the ATX style heading
@@ -305,10 +350,7 @@ print_markdown_heading(){
 
             local -i separator_length
             local -i terminal_columns
-            terminal_columns="$(
-                stty size \
-                    | awk '{print $2}'
-            )"
+            terminal_columns="$(get_terminal_columns)"
 
             local -i text_length="${#text}"
 
@@ -597,6 +639,21 @@ print_help(){
     # command substitution
     # shellcheck disable=SC2016
     print_markdown_heading \
+        '`--arch`, `--architecture <grub target architecture>`' \
+        3 \
+        atx
+    print_markdown_paragraph \
+        "$(gettext 'Specify the GRUB target architecture used when installing the bootloader.')"
+    print_markdown_paragraph \
+        "$(gettext 'Defaults to i386-pc for classic x86 BIOS booting.  Use arm64-efi for Windows on ARM and x86_64-efi or i386-efi for UEFI booting on x86 systems.')"
+    print_markdown_codeblock \
+        "$(gettext 'Supported examples: i386-pc, i386-efi, x86_64-efi, arm64-efi, arm-efi')" \
+        example
+
+    # The backtick pairs are Markdown's <code> markup, not a shell
+    # command substitution
+    # shellcheck disable=SC2016
+    print_markdown_heading \
         '`--for-gui`' \
         3 \
         atx
@@ -620,7 +677,7 @@ print_application_info(){
 }
 
 process_commandline_parameters(){
-    check_function_parameters_quantity 10 "${#}"
+    check_function_parameters_quantity 11 "${#}"
     local -r application_name="${1}"; shift
     local -n flag_print_help_ref="${1}"; shift
     local -n flag_print_version_ref="${1}"; shift
@@ -631,6 +688,7 @@ process_commandline_parameters(){
     local -n target_fs_label_ref="${1}"; shift
     local -n workaround_bios_boot_flag_ref="${1}"; shift
     local -n target_filesystem_type_ref="${1}"; shift
+    local -n grub_target_architecture_ref="${1}"; shift
 
     if [ "${#program_args[@]}" -eq 0 ]; then
         flag_print_help_ref=true
@@ -645,7 +703,8 @@ process_commandline_parameters(){
         enable_label=false \
         enable_workaround_bios_boot_flag=false \
         enable_debugging_internal_function_call=false \
-        enable_target_filesystem=false
+        enable_target_filesystem=false \
+        enable_grub_target_architecture=false
 
     # Inputs that requires sanitation
     local target_filesystem_type_input
@@ -754,6 +813,21 @@ process_commandline_parameters(){
                     <<< "${parameters[0]}"
                 )"
                 ;;
+            --arch=*)
+                enable_grub_target_architecture=true
+                grub_target_architecture_ref="${parameters[0]#*=}"
+                ;;
+            --arch \
+            |--architecture)
+                enable_grub_target_architecture=true
+                shift_array parameters
+                if [ ${#parameters[@]} -lt 1 ]; then
+                    print_error \
+                        "$(gettext -- '--arch option requires 1 argument.\n')"
+                    return 1
+                fi
+                grub_target_architecture_ref="${parameters[0]}"
+                ;;
             *)
                 print_error \
                     "$(gettext 'Unknown command-line argument "%s"\n')" \
@@ -817,6 +891,15 @@ process_commandline_parameters(){
         esac
     fi
 
+    # --arch requires a non-empty GRUB target architecture
+    if \
+        [ "${enable_grub_target_architecture}" = true ] \
+        && [ -z "${grub_target_architecture_ref}" ]; then
+        print_error \
+            "$(gettext -- '--arch option requires a non-empty GRUB target architecture(e.g. i386-pc, x86_64-efi, arm64-efi).\n')"
+        return 1
+    fi
+
     if [ "${flag_verbose}" = true ] && [ "${enable_debug}" != true ]; then
         trap 'trap_return "${FUNCNAME[0]}"' RETURN
     fi
@@ -871,11 +954,12 @@ process_miscellaneous_requests(){
 }
 
 check_runtime_dependencies(){
-    check_function_parameters_quantity 5 "${#}"
+    check_function_parameters_quantity 6 "${#}"
     local -r application_name="${1}"; shift
     local -n command_mkdosfs_ref="${1}"; shift
     local -n command_mkntfs_ref="${1}"; shift
     local -n command_grubinstall_ref="${1}"; shift
+    local -n command_wimsplit_ref="${1}"; shift
     local -n name_grub_prefix_ref="${1}"; shift
 
     local result=unknown
@@ -899,8 +983,6 @@ check_runtime_dependencies(){
         rm \
         stat \
         stty \
-        wget \
-        wimlib-imagex \
         wipefs
         do
         if ! command -v "${required_command}" >/dev/null; then
@@ -930,12 +1012,37 @@ check_runtime_dependencies(){
 
     if command -v mkntfs &>/dev/null; then
         command_mkntfs_ref=mkntfs
+    elif command -v mkfs.ntfs &>/dev/null; then
+        command_mkntfs_ref=mkfs.ntfs
     else
         print_error \
-            "$(gettext 'mkntfs command not found!\n')"
+            "$(gettext 'mkntfs/mkfs.ntfs command not found!\n')"
         print_error \
             "$(gettext 'Please make sure that ntfs-3g is properly installed!\n')"
         result=failed
+    fi
+
+    # wimlib >= 1.14 replaced the monolithic wimlib-imagex utility with
+    # individual tools such as wimsplit, keep compatibility with both.
+    if command -v wimsplit &>/dev/null; then
+        command_wimsplit_ref=wimsplit
+    elif command -v wimlib-imagex &>/dev/null; then
+        command_wimsplit_ref=wimlib-imagex
+    else
+        print_error \
+            "$(gettext 'wimsplit/wimlib-imagex command not found!\n')"
+        print_error \
+            "$(gettext 'Please make sure that wimlib is properly installed!\n')"
+        result=failed
+    fi
+
+    # A HTTP download utility is only required for downloading the
+    # UEFI:NTFS partition image on demand, prefer wget but accept curl
+    # as modern distributions increasingly ship curl by default.
+    if command -v wget &>/dev/null; then
+        command_http_download=wget
+    elif command -v curl &>/dev/null; then
+        command_http_download=curl
     fi
 
     if command -v grub-install &> /dev/null; then
@@ -994,25 +1101,56 @@ check_runtime_parameters(){
         return 1
     fi
 
-    if [ "${install_mode_ref}" = device ] \
-        && [[ "${target_media}" =~ .*[0-9] ]]
-        then
-        print_error \
-            "$(gettext 'Target media "%s" is not an entire storage device!\n')" \
-            "${target_media_ref}"
-        return 1
-    fi
+    # Determine whether the target is a whole device or a partition from
+    # the kernel's block topology instead of relying on the device name,
+    # which breaks with modern NVMe(/dev/nvme0n1) and eMMC(/dev/mmcblk0)
+    # naming that ends with digits.
+    local target_media_type
+    target_media_type="$(
+        lsblk \
+            --noheadings \
+            --nodeps \
+            --output TYPE \
+            "${target_media_ref}" \
+            2> /dev/null \
+        || true
+    )"
 
-    if [ "${install_mode_ref}" = partition ] \
-        && ! [[ "${target_media}" =~ .*[0-9] ]]
-        then
-        print_error \
-            "$(gettext 'Target media "%s" is not an partition!\n')" \
-            "${target_media_ref}"
-        return 1
+    if [ "${install_mode_ref}" = device ]; then
+        if [ "${target_media_type}" != disk ] \
+            && [ "${target_media_type}" != loop ]; then
+            print_error \
+                "$(gettext 'Target media "%s" is not an entire storage device!\n')" \
+                "${target_media_ref}"
+            return 1
+        fi
+    else
+        if [ "${target_media_type}" != part ]; then
+            print_error \
+                "$(gettext 'Target media "%s" is not an partition!\n')" \
+                "${target_media_ref}"
+            return 1
+        fi
     fi
 
     return 0
+}
+
+# Return the device path of a partition on a target device.
+# Modern storage device naming differs by device type:
+#   /dev/sda  -> /dev/sda1
+#   /dev/nvme0n1 -> /dev/nvme0n1p1
+#   /dev/mmcblk0  -> /dev/mmcblk0p1
+get_partition_device_path(){
+    check_function_parameters_quantity 2 "${#}"
+    local -r target_device="${1}"; shift
+    local -r partition_number="${1}"; shift
+
+    if [[ "${target_device}" =~ [0-9]$ ]]; then
+        printf '%sp%s' "${target_device}" "${partition_number}"
+    else
+        printf '%s%s' "${target_device}" "${partition_number}"
+    fi
 }
 
 determine_target_parameters(){
@@ -1027,13 +1165,30 @@ determine_target_parameters(){
         local target_filesystem_type_libblkid
 
         target_partition_ref="${target_media}"
-        # BASHDOC: Basic Shell Features » Shell Expansions » Shell Parameter Expansion(`${PARAMETER/PATTERN/STRING}')
-        target_device_ref="${target_media/%[0-9]/}"
+
+        # Derive the parent device from the kernel's sysfs topology via
+        # lsblk PKNAME so modern naming schemes(NVMe, eMMC) are handled
+        # correctly instead of naively stripping trailing digits.
+        local target_partition_parent
+        target_partition_parent="$(
+            lsblk \
+                --noheadings \
+                --nodeps \
+                --output PKNAME \
+                "${target_partition_ref}"
+        )"
+        if [ -n "${target_partition_parent}" ]; then
+            target_device_ref="/dev/${target_partition_parent}"
+        else
+            # Fallback for exotic device naming
+            target_device_ref="${target_media/%[0-9]/}"
+        fi
 
         # Detect target filesystem
         target_filesystem_type_libblkid="$(
                 lsblk \
                     --noheadings \
+                    --nodeps \
                     --output FSTYPE \
                     "${target_partition_ref}"
         )"
@@ -1057,7 +1212,7 @@ determine_target_parameters(){
         unset target_filesystem_type_libblkid
     else # install_mode = device
         target_device_ref="${target_media}"
-        target_partition_ref="${target_device}1"
+        target_partition_ref="$(get_partition_device_path "${target_device_ref}" 1)"
     fi
 
     if [ "${flag_verbose}" = true ]; then
@@ -1354,11 +1509,34 @@ install_uefi_ntfs_support_partition(){
     local -r download_directory="${1}"; shift
     local -r target_device="${1}"; shift
 
-    if ! wget \
-        --directory-prefix="${download_directory}" \
-        "https://cdn.jsdelivr.net/gh/pbatard/rufus@${rufus_uefi_ntfs_version}/res/uefi/uefi-ntfs.img"; then
+    local -r uefi_ntfs_image_url="https://cdn.jsdelivr.net/gh/pbatard/rufus@${rufus_uefi_ntfs_version}/res/uefi/uefi-ntfs.img"
+
+    if [ -z "${command_http_download}" ]; then
         print_warning \
-            "Unable to download UEFI:NTFS partition image from GitHub, installation skipped.  Target device might not be bootable if the UEFI firmware doesn't support NTFS filesystem.\\n"
+            "$(gettext "Neither wget nor curl is available, unable to download UEFI:NTFS partition image, installation skipped.  Target device might not be bootable if the UEFI firmware doesn't support NTFS filesystem.\n")"
+        return 0
+    fi
+
+    local download_succeeded=false
+    if [ "${command_http_download}" = wget ]; then
+        if wget \
+            --directory-prefix="${download_directory}" \
+            "${uefi_ntfs_image_url}"; then
+            download_succeeded=true
+        fi
+    else
+        if curl \
+            --location \
+            --fail \
+            --output "${download_directory}/uefi-ntfs.img" \
+            "${uefi_ntfs_image_url}"; then
+            download_succeeded=true
+        fi
+    fi
+
+    if [ "${download_succeeded}" != true ]; then
+        print_warning \
+            "$(gettext "Unable to download UEFI:NTFS partition image from the internet, installation skipped.  Target device might not be bootable if the UEFI firmware doesn't support NTFS filesystem.\n")"
         return 0
     fi
 
@@ -1497,7 +1675,37 @@ mount_target_filesystem(){
             fstype_options="-t vfat"
         ;;
         FS_NTFS)
-            fstype_options="-t ntfs-3g"
+            # ntfs-3g is still the battle-tested default, but modern
+            # kernels (>= 5.15) provide the in-kernel ntfs3 driver and
+            # some distributions have dropped ntfs-3g entirely.
+            if mount \
+                --options "${mount_options}" \
+                -t ntfs-3g \
+                "${target_partition}" \
+                "${target_fs_mountpoint}" \
+                2> /dev/null; then
+                return 0
+            fi
+
+            print_warning \
+                "$(gettext 'Unable to mount NTFS filesystem with ntfs-3g, falling back to the in-kernel ntfs3 driver...\n')"
+            if mount \
+                --options "${mount_options}" \
+                -t ntfs3 \
+                "${target_partition}" \
+                "${target_fs_mountpoint}" \
+                2> /dev/null; then
+                return 0
+            fi
+
+            print_warning \
+                "$(gettext 'Unable to mount NTFS filesystem with ntfs3, falling back to the generic ntfs alias...\n')"
+            mount \
+                --options "${mount_options}" \
+                -t ntfs \
+                "${target_partition}" \
+                "${target_fs_mountpoint}"
+            return $?
         ;;
         *)
             print_fatal \
@@ -1522,6 +1730,7 @@ check_target_filesystem_free_space(){
 
     free_space=$(
         df \
+            --portability \
             --block-size=1 \
             "${target_fs_mountpoint}" \
         | grep \
@@ -1531,6 +1740,7 @@ check_target_filesystem_free_space(){
     )
     free_space_human_readable=$(
         df \
+            --portability \
             --human-readable \
             "${target_fs_mountpoint}" \
         | grep \
@@ -1571,11 +1781,12 @@ check_target_filesystem_free_space(){
 
 # Copying all files from one filesystem to another, with progress reporting
 copy_filesystem_files(){
-    check_function_parameters_quantity 4 "${#}"
+    check_function_parameters_quantity 5 "${#}"
     local source_fs_mountpoint="${1}"; shift
     local target_fs_mountpoint="${1}"; shift
     local target_filesystem_type="${1}"; shift
     local dd_block_size="${1}"; shift
+    local -r command_wimsplit="${1}"; shift
 
     local -ir fat32_filesize_limit=4294967295 # 2^32 - 1
 
@@ -1626,7 +1837,8 @@ copy_filesystem_files(){
                             "${source_file}" \
                             "${dest_file}" \
                             "${copied_size}" \
-                            "${total_size}"
+                            "${total_size}" \
+                            "${command_wimsplit}"
                     fi
                 else
                     copy_large_file \
@@ -1715,17 +1927,25 @@ copy_large_file(){
 # Copy WIM files that is over 4GiB to a FAT32 filesystem
 # Using wimlib to split file into smaller parts
 copy_oversized_wim_file(){
-    check_function_parameters_quantity 4 "${#}"
+    check_function_parameters_quantity 5 "${#}"
     local source_file="${1}"; shift
     local dest_file="${1}"; shift
     local -ir caller_copied_size="${1}"; shift
     local -ir caller_total_size="${1}"; shift
+    local -r command_wimsplit="${1}"; shift
 
     local dest_file_basename="${dest_file%.wim}"
 
     # Split WIM image using wimtools to fit FAT32 restriction
     # Optimal split file size: 4GiB - 1MiB = 4095MiB
-    wimlib-imagex split \
+    local -a wim_split_command
+    if [ "${command_wimsplit}" = wimlib-imagex ]; then
+        wim_split_command=(wimlib-imagex split)
+    else
+        wim_split_command=("${command_wimsplit}")
+    fi
+
+    "${wim_split_command[@]}" \
         "${source_file}" \
         "${dest_file_basename}.swm" \
         4095 \
@@ -1787,17 +2007,27 @@ workaround_support_windows_7_uefi_boot(){
             --quiet \
             '^MinServer=7[0-9]{3}\.[0-9]' \
             "${source_fs_mountpoint}/sources/cversion.ini" \
+            2> /dev/null \
         || ! [ -f "${source_fs_mountpoint}/bootmgr.efi" ]; then
         return 0
     fi
 
     print_warning \
         "$(gettext 'Source media seems to be Windows 7-based with EFI support, applying workaround to make it support UEFI booting\n')"
-    if ! command -v '7z' >/dev/null 2>&1; then
+    if ! command -v '7z' >/dev/null 2>&1 \
+        && ! command -v '7zz' >/dev/null 2>&1; then
         print_warning \
             "$(gettext "'7z' utility not found, workaround is not applied.\\n")"
         return 0
     fi
+
+    local -r seven_zip_command="$( \
+        if command -v '7z' >/dev/null 2>&1; then
+            command -v '7z'
+        else
+            command -v '7zz'
+        fi
+    )"
 
     # Detect **case-insensitive** existing efi directories according to UEFI spec
     local \
@@ -1870,7 +2100,7 @@ workaround_support_windows_7_uefi_boot(){
         "${efi_boot_directory}"
 
     # Skip workaround if EFI bootloader already exist in efi_boot_directory
-    7z \
+    "${seven_zip_command}" \
         e \
         -so \
         "${source_fs_mountpoint}/sources/install.wim" \
@@ -1879,17 +2109,23 @@ workaround_support_windows_7_uefi_boot(){
 }
 
 install_legacy_pc_bootloader_grub(){
-    check_function_parameters_quantity 3 "${#}"
+    check_function_parameters_quantity 4 "${#}"
     local -r target_fs_mountpoint="${1}"; shift
     local -r target_device="${1}"; shift
     local -r command_grubinstall="${1}"; shift
+    local -r grub_target_architecture="${1}"; shift
 
     print_info \
-        "$(gettext 'Installing GRUB bootloader for legacy PC booting support...\n')"
-    "${command_grubinstall}" \
-        --target=i386-pc \
+        "$(gettext 'Installing GRUB bootloader for %s booting support...\n')" \
+        "${grub_target_architecture}"
+    if ! "${command_grubinstall}" \
+        --target="${grub_target_architecture}" \
         --boot-directory="${target_fs_mountpoint}" \
-        --force "${target_device}"
+        --force "${target_device}"; then
+        print_warning \
+            "$(gettext 'Failed to install GRUB bootloader for %s booting.  The target device might still be bootable if another boot mode is available.\n')" \
+            "${grub_target_architecture}"
+    fi
 
 
 }
@@ -1906,18 +2142,6 @@ install_legacy_pc_bootloader_grub_config(){
     print_info \
         "$(gettext 'Installing custom GRUB config for legacy PC booting...\n')"
     local -r grub_cfg="${target_fs_mountpoint}/${name_grub_prefix}/grub.cfg"
-    local target_fs_uuid; target_fs_uuid=$(
-        lsblk \
-            --noheadings \
-            --raw \
-            --output UUID,MOUNTPOINT \
-        | grep \
-            --extended-regexp \
-            "${target_fs_mountpoint}"$ \
-        | cut \
-            --fields=1 \
-            --delimiter=' '
-    )
 
     mkdir --parents "$(dirname "${grub_cfg}")"
     {
@@ -1927,7 +2151,7 @@ install_legacy_pc_bootloader_grub_config(){
             ntldr /bootmgr
             boot
 END_OF_FILE
-    } > "${grub_cfg}"; unset target_fs_uuid
+    } > "${grub_cfg}"
 }
 
 # Unmount mounted filesystem and clean-up mountpoint before exiting program
@@ -1968,10 +2192,12 @@ cleanup_mountpoint(){
 # Traps: Functions that are triggered when certain condition occurred
 # Shell Builtin Commands » Bourne Shell Builtins » trap
 trap_errexit(){
+    local -ir command_exit_status="${?}"
+
     print_error \
         "$(gettext 'The command "%s" failed with exit status "%u", program is prematurely aborted\n')"\
         "${BASH_COMMAND}" \
-        "${?}"
+        "${command_exit_status}"
 
     return 0
 }
@@ -2456,6 +2682,10 @@ declare flag_no_color=false
 # Need to be consumed by traps for clean-up
 declare flag_source_filesystem_mounted=false
 declare flag_target_filesystem_mounted=false
+
+# HTTP download utility, determined by check_runtime_dependencies
+# (wget preferred, curl accepted as fallback on modern distributions)
+declare command_http_download=
 
 # NOTE: Need to pass to traps, so need to be global
 declare \

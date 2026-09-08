@@ -46,20 +46,20 @@ WoeUSB will not be able to function without these software installed in their pr
   We specifically requires modules of the i386-pc architecture, for Debian-based distributions these are provided via the grub-pc-bin package
 * [GNU Parted](https://www.gnu.org/software/parted/)  
   For manipulating disk partition table and partitions
-* [GNU Wget](https://www.gnu.org/software/wget/)  
+* [GNU Wget](https://www.gnu.org/software/wget/) or [curl](https://curl.se/)
   For acquiring [Pete Batard](https://pete.akeo.ie/)'s [UEFI:NTFS](https://github.com/pbatard/uefi-ntfs) UEFI bootloader
 * [dosfstools](https://github.com/dosfstools/dosfstools)  
   For creating FAT filesystem in `--device` creation method
-* [NTFS-3G](https://www.tuxera.com/community/open-source-ntfs-3g/)  
+* [NTFS-3G](https://www.tuxera.com/community/open-source-ntfs-3g/) (providing `mkntfs`/`mkfs.ntfs`)
   For creating NTFS filesystem in `--device` creation method
-* [wimlib](https://wimlib.net/)  
+* [wimlib](https://wimlib.net/) (providing `wimsplit` or the older `wimlib-imagex`)
   For splitting install.wim Windows Imaging (WIM) archive so that archives over 4GiB can be fit in an FAT32 filesystem
 
 ### Optional
 
 Without the following dependencies WoeUSB will still able to run, but some functionalities will be unavailable:
 
-* [p7zip](https://sourceforge.net/projects/p7zip/)  
+* [p7zip](https://sourceforge.net/projects/p7zip/) or [7-Zip](https://www.7-zip.org/) (`7z`/`7zz`)
   For workaround the problem where the Windows 7 installation media doesn't ship their UEFI bootloader in the proper location
 * [Pete Batard](https://pete.akeo.ie/)'s [UEFI:NTFS](https://github.com/pbatard/uefi-ntfs) UEFI bootloader  
   For supporting NTFS filesystems in the target USB key
@@ -87,6 +87,35 @@ The following are the environment variables that may change WoeUSB's runtime beh
 | Variable name | Usage |
 | :-: | :-- |
 | RUFUS_UEFI_NTFS_VERSION | The release tag/revision of [the Rufus source tree](https://github.com/pbatard/rufus) to fetch the UEFI:NTFS image from, will use a tested version by default |
+
+### Command-line options
+
+* `--device`, `-d <source media> <device>`
+  Wipe the entire target device and build a bootable Windows USB from scratch.
+* `--partition`, `-p <source media> <partition>`
+  Copy Windows files into an existing partition and make it bootable.
+* `--target-filesystem`, `--tgt-fs <FAT|NTFS>`
+  Choose the target filesystem for `--device` creation(default: FAT).
+* `--arch`, `--architecture <grub target>`
+  Select the GRUB target architecture used when installing the bootloader(default: `i386-pc`).
+
+  Useful for modern systems:
+  * `i386-pc` — classic x86 BIOS booting(default)
+  * `i386-efi` / `x86_64-efi` — x86 UEFI booting
+  * `arm64-efi` — Windows on ARM / ARM64 UEFI booting
+  * `arm-efi` — 32-bit ARM UEFI booting
+
+  Examples:
+  ```sh
+  # x86 BIOS(default)
+  sudo woeusb --device Windows.iso /dev/sdX
+
+  # x86 UEFI
+  sudo woeusb --arch=x86_64-efi --device Windows.iso /dev/sdX
+
+  # Windows on ARM
+  sudo woeusb --arch=arm64-efi --device Windows11_ARM64.iso /dev/sdX
+  ```
 
 ## License
 
