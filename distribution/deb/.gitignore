@@ -1,0 +1,8 @@
+# Git tracking ignore rules: Ignore built packages, keep documentation
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+*
+.*
+!/.gitignore
+!/README.md

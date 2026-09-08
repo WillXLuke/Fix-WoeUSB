@@ -72,9 +72,28 @@ Without the following dependencies WoeUSB will still able to run, but some funct
 
 ## Installation
 
-To be addressed.  For now refer [Run from source](#run-from-source).
+### Debian package(deb)
 
-## Run from source
+An architecture-independent Debian binary package is available.  It installs the `woeusb` command system-wide so it can be run from any console.
+
+1. Build the package:
+   ```sh
+   ./dev-assets/build-deb.sh
+   ```
+1. Install it:
+   ```sh
+   sudo dpkg -i distribution/deb/woeusb_<version>_all.deb
+   sudo apt-get install -f   # resolve any missing dependencies if prompted
+   ```
+1. Use it from any console:
+   ```sh
+   woeusb --help
+   sudo woeusb --arch=arm64-efi --device Windows11_ARM64.iso /dev/sdX
+   ```
+
+See [distribution/deb/README.md](distribution/deb/README.md) for details.
+
+### Run from source
 
 WoeUSB is a program that can be run without installation(excluding its [dependencies](#dependencies)):
 

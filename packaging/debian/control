@@ -1,0 +1,15 @@
+Package: woeusb
+Version: @@WOEUSB_VERSION@@
+Architecture: all
+Maintainer: William Luke <WillXLuke@users.noreply.github.com>
+Section: utils
+Priority: optional
+Depends: bash (>= 4.3), coreutils, util-linux, grep, awk, findutils, parted, dosfstools, wget | curl, ntfs-3g, wimtools, grub2-common
+Recommends: gettext, p7zip-full | 7zip, grub-pc-bin | grub-efi-amd64-bin | grub-efi-arm64-bin | grub-efi-ia32-bin
+Description: Create bootable Windows USB sticks from a Windows ISO or DVD
+ WoeUSB creates a bootable Windows installation USB storage device from
+ an existing Windows optical disk or ISO disk image.
+ .
+ Supports FAT and NTFS target filesystems, UEFI and legacy PC booting,
+ and a configurable GRUB target architecture (--arch) for Windows on
+ ARM and other platforms.
