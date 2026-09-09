@@ -1,6 +1,7 @@
 **Changelog**
 
 I've made it work on newer linux fixing deprecated wimlib-imagex issue and added arm64 support(cmdline --arch) :)
+Debian package ready to use:https://github.com/WillXLuke/Fix-WoeUSB/releases/tag/5.3.0
 
 # WoeUSB
 
